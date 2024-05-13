@@ -1,0 +1,8 @@
+---
+services:
+    app:
+        image: billsummarizer
+        build:
+            context: .
+        volumes:
+          - .:/app

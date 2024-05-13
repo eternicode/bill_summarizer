@@ -1,0 +1,33 @@
+[tool.poetry]
+name = "bill-summarizer"
+version = "0.1.0"
+description = "LLM Summaries of Legislation"
+authors = []
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+
+[tool.poetry.group.test.dependencies]
+pytest = "^8.2.0"
+coverage = "^7.5.1"
+pytest-cov = "^5.0.0"
+pytest-xdist = "^3.6.1"
+pytest-sugar = "^1.0.0"
+pytest-mock = "^3.14.0"
+pytest-randomly = "^3.15.0"
+pytest-clarity = "^1.0.1"
+
+[tool.poetry.group.dev.dependencies]
+ipython = "^8.24.0"
+ipdb = "^0.13.13"
+pre-commit = "^3.7.1"
+black = "^24.4.2"
+isort = "^5.13.2"
+
+[tool.isort]
+profile = "black"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
