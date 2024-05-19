@@ -1,7 +1,10 @@
 import itertools
+import os
+import sys
 from typing import List, Tuple
 
 import cv2
+import numpy as np
 
 
 def get_lines_bruteforce(image_bw) -> List[Tuple[int, int, int, int]]:
@@ -11,17 +14,25 @@ def get_lines_bruteforce(image_bw) -> List[Tuple[int, int, int, int]]:
 
     height, width = image_bw.shape
 
-    for y in range(height):
-        for x in range(width):
-            if image_bw[y, x] < 200:
-                if not is_line:
-                    is_line = True
-                    line = (x, y)
-            else:
-                if is_line:
-                    is_line = False
-                    line += (x - 1, y)
-                    lines.append(line)
+    indices = np.where(image_bw < 200)
+
+    prev_x = -1
+    prev_y = -1
+    for y, x in zip(*indices):
+        if not line:
+            # first iteration of loop
+            line = (x, y)
+        elif x - prev_x == 1 and y == prev_y:
+            # continuation of a line
+            pass
+        else:
+            # end of a line, start of a new one
+            if line:
+                lines.append(line + (prev_x, prev_y))
+            line = (x, y)
+        prev_x, prev_y = x, y
+    if line:
+        lines.append(line + (prev_x, prev_y))
     return lines
 
 
@@ -61,18 +72,20 @@ def get_image_lines(filename):
 
 
 if __name__ == "__main__":
-    lines = get_image_lines("docs/bg1.png")
+    filename = sys.argv[1]
+    lines = get_image_lines(filename)
 
     print(len(lines))
     if len(lines) < 10:
         print(lines)
 
     colors = list(itertools.product([0, 127, 255], repeat=3))[1:-1]
-    verify = cv2.imread("docs/bg1.png")
+    verify = cv2.imread(filename)
     color = colors[-1]
     for line in lines:
         color = colors[(colors.index(color) + 1) % len(colors)]
 
         x1, y1, x2, y2 = line
         cv2.line(verify, (x1, y1), (x2, y2), color, 1)
-    cv2.imwrite("docs/bg1-verify.png", verify)
+    filename_verify = "-verify".join(os.path.splitext(filename))
+    cv2.imwrite(filename_verify, verify)
