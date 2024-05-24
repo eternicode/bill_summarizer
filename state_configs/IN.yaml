@@ -1,0 +1,9 @@
+---
+HB:
+    ignore_bounds:
+      - [600, 180, 625, 210] # page number
+      - [310, 1380, 520, 1420] # footer
+TITLE:
+    process_strikethroughs: false
+    ignore_bounds:
+      - [250, 1410, 450, 1450] # footer

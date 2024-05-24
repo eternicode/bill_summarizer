@@ -1,3 +1,4 @@
+import enum
 import logging
 import math
 import subprocess
@@ -6,6 +7,7 @@ from datetime import datetime
 from tempfile import mkdtemp
 
 import pandas as pd
+import yaml
 
 from lines import get_image_lines
 
@@ -49,29 +51,65 @@ class MDFormatter:
         self.content += content
 
 
-def process_pdf(filename):
+def make_formatting():
+    formatting = []  # track nesting of italic, bold, struck
+
+    def get_formatting(bold, italic, struck, word) -> str:
+        output = ""
+        if italic or bold or struck:
+            output += " "
+        if italic:
+            if "italic" not in formatting:
+                formatting.append("italic")
+                output += "_"
+        if bold:
+            if "bold" not in formatting:
+                formatting.append("bold")
+                output += "**"
+        if struck:
+            if "struck" not in formatting:
+                formatting.append("struck")
+                output += "~~"
+        end_format = False
+        if not struck:
+            if "struck" in formatting:
+                formatting.remove("struck")
+                output += "~~"
+                end_format = True
+        if not bold:
+            if "bold" in formatting:
+                formatting.remove("bold")
+                output += "**"
+                end_format = True
+        if not italic:
+            if "italic" in formatting:
+                formatting.remove("italic")
+                output += "_"
+                end_format = True
+        if end_format:
+            output += " "
+        output += ("" if output else " ") + word
+        return output
+
+    return get_formatting
+
+
+class DocType(str, enum.Enum):
+    HB = "HB"
+    SB = "SB"
+    HR = "HR"
+    SR = "SR"
+    TITLE = "TITLE"
+
+
+def process_pdf(filename, state: str, doctype: DocType):
     log.info("Creating temp dir")
     tempdir = mkdtemp(dir="tmp/", prefix=datetime.now().strftime("%Y-%m-%d-%H%M%S_"))
     log.info(f"Temp dir: {tempdir}")
 
-    log.info("Extracting images with pdf2htmlEX")
-    with (
-        open(f"{tempdir}/pdf2htmlEX.err", "w") as errfile,
-        open(f"{tempdir}/pdf2htmlEX.log", "w") as outfile,
-    ):
-        subprocess.run(
-            [
-                "pdf2htmlEX",
-                "--dest-dir",
-                tempdir,
-                "--embed-image",
-                "0",
-                filename,
-            ],
-            check=True,
-            stderr=errfile,
-            stdout=outfile,
-        )
+    with open(f"state_configs/{state}.yaml", "r") as config_file:
+        state_config = yaml.safe_load(config_file)
+    config = state_config.get(doctype.value, {})
 
     log.info("Extracting text with textricator")
     with (
@@ -94,33 +132,51 @@ def process_pdf(filename):
     log.info("Reading in content CSV")
     rows = pd.read_csv(f"{tempdir}/contents.csv", na_filter=False)
     rows[["ulx", "uly", "lrx", "lry"]] = rows[["ulx", "uly", "lrx", "lry"]] * 2
-
-    ignore_bounds = [
-        (600, 180, 625, 210),  # page number
-        (310, 1380, 520, 1420),  # footer
-    ]
-
-    log.info("Masking out ignored regions")
-    # remove rows that are entirely within the ignore bounds
-    rows = rows[
-        ~rows.apply(
-            lambda row: any(
-                (row["ulx"] >= iulx)
-                & (row["uly"] >= iuly)
-                & (row["lrx"] <= ilrx)
-                & (row["lry"] <= ilry)
-                for iulx, iuly, ilrx, ilry in ignore_bounds
-            ),
-            axis=1,
-        )
-    ]
-
-    log.info("Getting strikethrough data")
     page_count = rows["page"].max()
-    page_lines = {
-        page_num: get_image_lines(f"{tempdir}/bg{page_num:x}.png")
-        for page_num in range(1, page_count + 1)
-    }
+
+    # remove words that are entirely within the ignore bounds
+    ignore_bounds = state_config.get(doctype.value, {}).get("ignore_bounds", [])
+    if ignore_bounds:
+        log.info("Masking out ignored regions")
+        rows = rows[
+            ~rows.apply(
+                lambda row: any(
+                    (row["ulx"] >= iulx)
+                    & (row["uly"] >= iuly)
+                    & (row["lrx"] <= ilrx)
+                    & (row["lry"] <= ilry)
+                    for iulx, iuly, ilrx, ilry in ignore_bounds
+                ),
+                axis=1,
+            )
+        ]
+
+    process_strikethroughs = config.get("process_strikethroughs", False)
+    if process_strikethroughs:
+        log.info("Extracting images with pdf2htmlEX")
+        with (
+            open(f"{tempdir}/pdf2htmlEX.err", "w") as errfile,
+            open(f"{tempdir}/pdf2htmlEX.log", "w") as outfile,
+        ):
+            subprocess.run(
+                [
+                    "pdf2htmlEX",
+                    "--dest-dir",
+                    tempdir,
+                    "--embed-image",
+                    "0",
+                    filename,
+                ],
+                check=True,
+                stderr=errfile,
+                stdout=outfile,
+            )
+
+        log.info("Processing strikethrough data")
+        page_lines = {
+            page_num: get_image_lines(f"{tempdir}/bg{page_num:x}.png")
+            for page_num in range(1, page_count + 1)
+        }
 
     log.info("Processing content formatting")
     # Annotate rows with bold and italic
@@ -129,80 +185,46 @@ def process_pdf(filename):
     log.info("(Italic)")
     rows["italic"] = rows["font"].str.lower().str.contains("italic")
     log.info("(Struck)")
-    rows["struck"] = rows.apply(
-        lambda row: any(
-            (row["uly"] <= y1)
-            & (row["lry"] >= y1)
-            & (row["ulx"] <= x2)
-            & (row["lrx"] >= x1)
-            for x1, y1, x2, y2 in page_lines[row["page"]]
-        ),
-        axis=1,
-    )
+    if not process_strikethroughs:
+        rows["struck"] = False
+    else:
+        rows["struck"] = rows.apply(
+            lambda row: any(
+                (row["uly"] <= y1)
+                & (row["lry"] >= y1)
+                & (row["ulx"] <= x2)
+                & (row["lrx"] >= x1)
+                for x1, y1, x2, y2 in page_lines[row["page"]]
+            ),
+            axis=1,
+        )
+
+    leftmost_text = rows["ulx"].min()
+
+    font_sizes_list = list(sorted(set(rows["fontSize"]), reverse=True))
+    header_sizes = dict.fromkeys(font_sizes_list, 0)
+    for font_size in font_sizes_list:
+        if font_size > 12:
+            header_sizes[font_size] = max(header_sizes.values()) + 1
 
     formatter = MDFormatter()
 
+    get_formatting = make_formatting()
+
     for page_num in range(1, page_count + 1):
         log.info(f"Processing page {page_num}/{page_count}")
-        words = rows[rows["page"] == page_num]
-
-        leftmost_text = words["ulx"].min()
-
-        formatting = []  # track nesting of italic, bold, struck
-
-        def get_formatting(bold, italic, struck, word) -> str:
-            nonlocal formatting
-            output = ""
-            if italic or bold or struck:
-                output += " "
-            if italic:
-                if "italic" not in formatting:
-                    formatting.append("italic")
-                    output += "_"
-            if bold:
-                if "bold" not in formatting:
-                    formatting.append("bold")
-                    output += "**"
-            if struck:
-                if "struck" not in formatting:
-                    formatting.append("struck")
-                    output += "~~"
-            end_format = False
-            if not struck:
-                if "struck" in formatting:
-                    formatting.remove("struck")
-                    output += "~~"
-                    end_format = True
-            if not bold:
-                if "bold" in formatting:
-                    formatting.remove("bold")
-                    output += "**"
-                    end_format = True
-            if not italic:
-                if "italic" in formatting:
-                    formatting.remove("italic")
-                    output += "_"
-                    end_format = True
-            if end_format:
-                output += " "
-            output += ("" if output else " ") + word
-            return output
-
-        font_sizes_list = list(sorted(set(words["fontSize"]), reverse=True))
-        header_sizes = dict.fromkeys(font_sizes_list, 0)
-        for font_size in font_sizes_list:
-            if font_size > 12:
-                header_sizes[font_size] = max(header_sizes.values()) + 1
+        words = rows[rows["page"] == page_num][
+            ["ulx", "uly", "content", "bold", "italic", "struck", "fontSize"]
+        ]
 
         prev_y = None
         start_of_line = True
         header = ""
 
-        for _, word in words.iterrows():
-            ulx, uly, content, bold, italic, struck, font_size = word[
-                ["ulx", "uly", "content", "bold", "italic", "struck", "fontSize"]
-            ]
-
+        for (
+            _,
+            (ulx, uly, content, bold, italic, struck, font_size),
+        ) in words.iterrows():
             if prev_y is None:
                 prev_y = uly - font_size * 2
 
@@ -232,8 +254,8 @@ def process_pdf(filename):
                 formatted = formatted.lstrip()
                 start_of_line = False
             print(formatted, end="", flush=True)
-        formatted = get_formatting(False, False, False, "")
-        print(formatted, flush=True)
+        # formatted = get_formatting(False, False, False, "")
+        # print(formatted, flush=True)
 
     # print(formatter.content)
 
@@ -242,4 +264,4 @@ def process_pdf(filename):
 
 
 if __name__ == "__main__":
-    process_pdf(sys.argv[1])
+    process_pdf(sys.argv[1], sys.argv[2], DocType(sys.argv[3]))
