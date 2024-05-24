@@ -2,7 +2,7 @@
 name = "bill-summarizer"
 version = "0.1.0"
 description = "LLM Summaries of Legislation"
-authors = []
+authors = ["Andrew Rowls <eternicode@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
